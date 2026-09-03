@@ -113,3 +113,11 @@ The DLL lands in `bin/Release/AntTrails.dll`. Copy it into your profile's
 
 - [BepInExPack Valheim](https://valheim.thunderstore.io/package/denikson/BepInExPack_Valheim/)
 - [Jotunn](https://valheim.thunderstore.io/package/ValheimModding/Jotunn/)
+
+## License
+
+[MIT](LICENSE).
+
+## Source
+
+<https://github.com/egaroib/Valheim-AntTrails>

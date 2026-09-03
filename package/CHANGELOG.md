@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Added an MIT license.
+- Set `website_url` in the manifest so the Thunderstore listing links to the source repo.
+
+No functional or behavioural changes; the plugin itself is identical to 0.1.1.
+
 ## 0.1.1
 
 - Widened the allowed range on `StepsToPath`, `RevertDays`, and `StoneSteps`. The previous

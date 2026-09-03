@@ -20,7 +20,7 @@ namespace AntTrails
     {
         public const string PluginGuid = "com.ragemedia.anttrails";
         public const string PluginName = "AntTrails";
-        public const string PluginVersion = "0.1.1";
+        public const string PluginVersion = "0.1.2";
 
         internal static AntTrailsPlugin Instance;
         internal static ConfigEntry<bool> VerboseLogging;
