@@ -1,0 +1,72 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>AntTrails</AssemblyName>
+    <RootNamespace>AntTrails</RootNamespace>
+    <Version>0.1.1</Version>
+    <Description>Player footfall slowly wears dirt paths into the world, and heavy traffic cobbles them to stone.</Description>
+    <Authors>RAGEmedia</Authors>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets net462 compile on Linux without Mono. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <!-- Rewrites referenced game assemblies so private members are reachable. -->
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.1" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- References use Include=<name> + HintPath. Passing a bare path in Include makes the
+       .NET 10 SDK read it as a strong assembly name and drop the reference (MSB3106). -->
+  <ItemGroup>
+    <!-- Game code. Publicized: most of Valheim's members are private. -->
+    <Reference Include="assembly_valheim">
+      <HintPath>$(ValheimManaged)/assembly_valheim.dll</HintPath>
+      <Publicize>true</Publicize><Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_utils"
+               Condition="Exists('$(ValheimManaged)/assembly_utils.dll')">
+      <HintPath>$(ValheimManaged)/assembly_utils.dll</HintPath>
+      <Publicize>true</Publicize><Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_guiutils"
+               Condition="Exists('$(ValheimManaged)/assembly_guiutils.dll')">
+      <HintPath>$(ValheimManaged)/assembly_guiutils.dll</HintPath>
+      <Publicize>true</Publicize><Private>false</Private>
+    </Reference>
+
+    <!-- BepInEx and Harmony from the Gale dev profile, so we compile against exactly
+         what will be loaded at runtime rather than a NuGet copy. -->
+    <Reference Include="BepInEx">
+      <HintPath>$(ValheimBepInExCore)/BepInEx.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(ValheimBepInExCore)/0Harmony.dll</HintPath><Private>false</Private>
+    </Reference>
+
+    <Reference Include="Jotunn">
+      <HintPath>$(JotunnDll)</HintPath><Private>false</Private>
+    </Reference>
+
+    <!-- BepInEx and Jotunn are built against netstandard2.1; without this facade their
+         public signatures are unreadable from a net462 project (CS0012 on System.Object). -->
+    <Reference Include="netstandard">
+      <HintPath>$(ValheimManaged)/netstandard.dll</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity. Globbed because the exact module set shifts between Unity versions. -->
+  <ItemGroup>
+    <UnityAssembly Include="$(ValheimManaged)/UnityEngine*.dll" />
+    <UnityAssembly Include="$(ValheimManaged)/Unity.TextMeshPro.dll"
+                   Condition="Exists('$(ValheimManaged)/Unity.TextMeshPro.dll')" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Name-only, resolved from $(ValheimManaged) on the search path. Per-item HintPath
+         would need target batching; these all live in one directory anyway. -->
+    <Reference Include="@(UnityAssembly->'%(Filename)')">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

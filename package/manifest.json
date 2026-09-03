@@ -1,0 +1,10 @@
+{
+  "name": "AntTrails",
+  "version_number": "0.1.1",
+  "website_url": "",
+  "description": "Footfall slowly wears dirt paths into the world; heavy traffic cobbles them to stone.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2202",
+    "ValheimModding-Jotunn-2.20.1"
+  ]
+}

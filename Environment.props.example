@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copy to Environment.props and set these to your own paths.
+     Inside a valheim-mod skill workspace this is generated for you by scripts/setup.sh
+     at the workspace root, and this file is not needed. -->
+<Project>
+  <PropertyGroup>
+    <!-- Steam install. Read-only: nothing here is ever written to. -->
+    <ValheimDir>/path/to/steamapps/common/Valheim</ValheimDir>
+    <ValheimManaged>$(ValheimDir)/valheim_Data/Managed</ValheimManaged>
+
+    <!-- A mod-manager profile holding BepInEx and Jotunn. This is what the mod is
+         compiled against, so it matches exactly what will load at runtime. -->
+    <GaleProfile>/path/to/gale/valheim/profiles/yourprofile</GaleProfile>
+    <ValheimBepInExCore>$(GaleProfile)/BepInEx/core</ValheimBepInExCore>
+    <JotunnDll>$(GaleProfile)/BepInEx/plugins/ValheimModding-Jotunn/Jotunn.dll</JotunnDll>
+  </PropertyGroup>
+</Project>

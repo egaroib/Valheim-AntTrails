@@ -1,0 +1,25 @@
+{
+  "mod": "AntTrails",
+  "targets": [
+    {
+      "type": "Game",
+      "method": "Start"
+    },
+    {
+      "type": "TerrainComp",
+      "method": "Awake"
+    },
+    {
+      "type": "ZNet",
+      "method": "SaveWorld"
+    },
+    {
+      "type": "ZNet",
+      "method": "Shutdown"
+    },
+    {
+      "type": "ZNet",
+      "method": "ShutdownWithoutSave"
+    }
+  ]
+}
