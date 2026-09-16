@@ -4,8 +4,14 @@ using UnityEngine;
 namespace AntTrails
 {
     /// <summary>
-    /// Client side. Watches which 1x1m tile the local player is standing on and reports
+    /// Client side. Traces which 1x1m tiles the local player walks across and reports
     /// crossings to the server in batches.
+    ///
+    /// Sampling only credits the tile underfoot would leave gaps: at a run the player
+    /// covers more than a metre between samples, so consecutive sampled tiles are not
+    /// even adjacent and the trail comes out dotted. Instead each sample credits every
+    /// tile on the line from the previous sample, so a route is traced continuously
+    /// however fast it is travelled.
     ///
     /// Reporting on tile *entry* rather than continuously is what stops a player idling at
     /// a workbench from boring a hole in the ground: standing still is one crossing, no
@@ -18,20 +24,25 @@ namespace AntTrails
         /// <summary>Seconds between batches. Independent of sampling rate; this is the network cost.</summary>
         private const float SendIntervalSeconds = 2f;
 
+        /// <summary>Longest run of travel between two samples still treated as a walk, in metres.</summary>
+        private const float MaxSegmentLength = 8f;
+
+        /// <summary>Hard cap on tiles credited from one segment.</summary>
+        private const int MaxSegmentTiles = 24;
+
         private static readonly HashSet<long> Pending = new HashSet<long>();
 
         private static float _sampleTimer;
         private static float _sendTimer;
-        private static bool _haveLastTile;
-        private static int _lastX;
-        private static int _lastZ;
+        private static bool _haveLastPos;
+        private static Vector3 _lastPos;
 
         internal static void Reset()
         {
             Pending.Clear();
             _sampleTimer = 0f;
             _sendTimer = 0f;
-            _haveLastTile = false;
+            _haveLastPos = false;
         }
 
         internal static void Tick(float dt)
@@ -61,7 +72,7 @@ namespace AntTrails
             var player = Player.m_localPlayer;
             if (player == null || player.IsDead())
             {
-                _haveLastTile = false;
+                _haveLastPos = false;
                 return;
             }
 
@@ -69,14 +80,14 @@ namespace AntTrails
             // nothing, and neither does standing on a built floor.
             if (!player.IsOnGround() || player.IsSwimming() || player.InWater() || player.InLiquid())
             {
-                _haveLastTile = false;
+                _haveLastPos = false;
                 return;
             }
 
             var ground = player.GetLastGroundCollider();
             if (ground == null)
             {
-                _haveLastTile = false;
+                _haveLastPos = false;
                 return;
             }
 
@@ -84,32 +95,111 @@ namespace AntTrails
             var hmap = ground.GetComponent<Heightmap>();
             if (hmap == null)
             {
-                _haveLastTile = false;
+                _haveLastPos = false;
                 return;
             }
 
             var pos = player.transform.position;
-            int tx = Mathf.FloorToInt(pos.x);
-            int tz = Mathf.FloorToInt(pos.z);
 
-            if (_haveLastTile && tx == _lastX && tz == _lastZ)
+            if (!_haveLastPos)
             {
-                return; // still on the same tile; not a new crossing
+                // Just landed, surfaced, or stepped off a floor. There is no previous
+                // position to draw from, so credit only where we are standing.
+                Credit(hmap, Mathf.FloorToInt(pos.x), Mathf.FloorToInt(pos.z), pos.y);
+            }
+            else
+            {
+                TraceSegment(hmap, _lastPos, pos);
             }
 
-            _haveLastTile = true;
-            _lastX = tx;
-            _lastZ = tz;
+            _haveLastPos = true;
+            _lastPos = pos;
+        }
 
-            if (!IsEligible(hmap, pos))
+        /// <summary>
+        /// Credits every tile the straight line from <paramref name="from"/> to
+        /// <paramref name="to"/> passes through, excluding the one it starts in --
+        /// that tile was credited by the sample that ended there.
+        /// </summary>
+        private static void TraceSegment(Heightmap hmap, Vector3 from, Vector3 to)
+        {
+            int tx = Mathf.FloorToInt(from.x);
+            int tz = Mathf.FloorToInt(from.z);
+            int endX = Mathf.FloorToInt(to.x);
+            int endZ = Mathf.FloorToInt(to.z);
+
+            if (tx == endX && tz == endZ)
+            {
+                return; // never left the tile; standing still still costs nothing
+            }
+
+            float dx = to.x - from.x;
+            float dz = to.z - from.z;
+
+            // A portal, a teleport, or a hitching frame is not a walk. Credit where the
+            // player actually ended up rather than ruling a line across the landscape.
+            if (dx * dx + dz * dz > MaxSegmentLength * MaxSegmentLength)
+            {
+                Credit(hmap, endX, endZ, to.y);
+                return;
+            }
+
+            int stepX = dx > 0f ? 1 : -1;
+            int stepZ = dz > 0f ? 1 : -1;
+
+            // Distance along the segment, as a fraction of its length, to the next tile
+            // boundary on each axis and between successive boundaries after that.
+            float tDeltaX = dx != 0f ? Mathf.Abs(1f / dx) : float.MaxValue;
+            float tDeltaZ = dz != 0f ? Mathf.Abs(1f / dz) : float.MaxValue;
+
+            float tMaxX = dx > 0f ? (tx + 1 - from.x) / dx
+                        : dx < 0f ? (tx - from.x) / dx
+                        : float.MaxValue;
+            float tMaxZ = dz > 0f ? (tz + 1 - from.z) / dz
+                        : dz < 0f ? (tz - from.z) / dz
+                        : float.MaxValue;
+
+            // Amanatides-Woo grid traversal: repeatedly cross whichever axis boundary
+            // the segment reaches first. The step cap is a guard against float drift
+            // leaving the walk unable to land exactly on the end tile.
+            for (int i = 0; i < MaxSegmentTiles; i++)
+            {
+                if (tMaxX < tMaxZ)
+                {
+                    tx += stepX;
+                    tMaxX += tDeltaX;
+                }
+                else
+                {
+                    tz += stepZ;
+                    tMaxZ += tDeltaZ;
+                }
+
+                Credit(hmap, tx, tz, to.y);
+
+                if (tx == endX && tz == endZ)
+                {
+                    return;
+                }
+            }
+        }
+
+        /// <summary>Queues one crossing of a tile, if the tile is one we are willing to wear.</summary>
+        private static void Credit(Heightmap hmap, int tx, int tz, float y)
+        {
+            if (Pending.Count >= MaxPendingTiles)
             {
                 return;
             }
 
-            if (Pending.Count < MaxPendingTiles)
+            // Eligibility is tested at the tile centre, which is where the wear lands,
+            // rather than wherever within the tile the player happened to be sampled.
+            if (!IsEligible(hmap, new Vector3(tx + 0.5f, y, tz + 0.5f)))
             {
-                Pending.Add(TrailStore.TileKey(tx, tz));
+                return;
             }
+
+            Pending.Add(TrailStore.TileKey(tx, tz));
         }
 
         private static bool IsEligible(Heightmap hmap, Vector3 pos)

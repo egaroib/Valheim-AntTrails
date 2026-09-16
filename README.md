@@ -13,11 +13,12 @@ the summer everyone was raiding.
 
 ## Who needs to install this
 
-**Every player and the server.** This writes to the shared terrain paint mask, which is
-persisted in the world save and replicated to every peer. Wear counters are kept by the
-host (or dedicated server), and clients report where they walked. A player without the mod
-still *sees* the paths, but their footsteps never count toward creating one — so on a
-server where only some people have it, trails form only under the players who do.
+**Every player and the server, and this is enforced.** This writes to the shared terrain
+paint mask, which is persisted in the world save and replicated to every peer. The server
+keeps every wear counter and decides what each tile should look like; clients report where
+they walked and paint the terrain they own, because on a dedicated server the server itself
+has no terrain loaded near a player. Both halves of that loop need the mod, so a peer
+without it is refused at connect rather than silently desyncing.
 
 Config values that change behaviour are admin-only and pushed from the server, so everyone
 plays by the same numbers.
@@ -32,17 +33,29 @@ nudges it upward a little at a time, so a path fades in rather than appearing:
 |---|---|
 | A few crossings | Faint scuffing, grass still there |
 | Halfway to the threshold | Grass clears; visible bare track |
-| Threshold reached (`StepsToPath`, default 60) | Full dirt path |
-| Very heavy lifetime use (`StoneSteps`, default 1200) | Small per-crossing chance of stone |
+| Threshold reached (`StepsToPath`, default 25) | Full dirt path |
+| Very heavy lifetime use (`StoneSteps`, default 400) | Small per-crossing chance of stone |
 
 Crossings from **all players pool together** — four people walking a route wear it four
 times as fast.
 
+Your position is sampled a few times a second and every tile on the line *between* two
+samples is credited too, so a route sprinted at full tilt wears exactly as evenly as one
+strolled. The trace follows where you actually put your feet, which means a route walked
+loosely spreads its wear over a corridor a couple of metres wide rather than concentrating
+it into one line.
+
 ### Losing a path
 
-Progress on an *unfinished* tile leaks away continuously, reaching zero after
-`FormationWindowDays` (default 4) of no traffic. A route you walk once a fortnight will
-never become a path; one you walk daily will.
+Progress on an *unfinished* tile leaks away continuously, at a flat
+`StepsToPath ÷ FormationWindowDays` per in-game day — about two crossings a day at the
+defaults, one every quarter hour of real time.
+
+That makes formation a contest of rate rather than of total. A tile crossed less often than
+it leaks never gains ground at all, however long you persist; a tile crossed twice that
+often wears through in eight or nine in-game days. So the route between your base and the
+copper vein you have been working all evening settles in, and the one-off detour you took
+to a swamp last week leaves nothing behind.
 
 A *finished* path fades far more slowly, taking `RevertDays` (default 30) of neglect to sink
 to `ResidualTrace` (default 0.3) — a faint permanent scar, below the threshold where grass
@@ -69,16 +82,16 @@ server-synced; sampling rate and logging are local to each client.
 | Key | Default | Meaning |
 |---|---|---|
 | `Enabled` | `true` | Master switch. Existing terrain is left as-is when off. |
-| `StepsToPath` | `60` | Crossings to fully wear one tile. |
-| `FormationWindowDays` | `4` | Days of neglect to lose all unfinished progress. |
+| `StepsToPath` | `25` | Crossings to fully wear one tile. |
+| `FormationWindowDays` | `12` | Days of neglect to lose all unfinished progress. |
 | `RevertDays` | `30` | Days of neglect for a finished path to fade to the floor. |
 | `ResidualTrace` | `0.3` | Permanent floor a faded path keeps. `0` lets paths vanish. |
-| `StoneSteps` | `1200` | Lifetime crossings before stone becomes possible. |
-| `StoneChance` | `0.004` | Per-crossing chance of stone once eligible. |
+| `StoneSteps` | `400` | Lifetime crossings before stone becomes possible. |
+| `StoneChance` | `0.01` | Per-crossing chance of stone once eligible. |
 | `RespectBuildPrivilege` | `true` | Skip tiles inside workbench/ward range. |
 | `FlushIntervalSeconds` | `5` | How often paint changes are pushed to terrain. |
 | `DecaySweepSeconds` | `60` | How often loaded tiles are re-checked for decay. |
-| `SampleIntervalSeconds` | `0.25` | How often this client checks its own position. Local. |
+| `SampleIntervalSeconds` | `0.25` | How often this client samples its own position. Local. |
 
 ### A note on the network
 

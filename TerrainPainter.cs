@@ -4,65 +4,83 @@ using UnityEngine;
 namespace AntTrails
 {
     /// <summary>
-    /// Turns the engine's dirty tiles into terrain paint.
+    /// Client side. Turns the server's "this tile should look like this" into terrain paint.
     ///
-    /// Vanilla paints by spawning a TerrainOp, which serializes the whole zone's terrain
-    /// blob into a ZDO once per operation (TerrainComp.Save). Doing that per footstep would
-    /// be ruinous, so instead we batch every changed tile in a zone into one custom RPC
-    /// delivered to that zone's TerrainComp owner, which applies them all and saves once.
+    /// Resolution happens here rather than on the server because this is the peer that
+    /// actually has the zone loaded: Heightmap.s_heightmaps, the TerrainComp, and the real
+    /// paint mask all live on whoever is standing there. The server only knows tile
+    /// coordinates.
+    ///
+    /// Vanilla paints by spawning a TerrainOp, which re-serializes the whole zone's terrain
+    /// blob into a ZDO once per operation. Doing that per footstep would be ruinous, so a
+    /// whole batch is applied to each TerrainComp before a single Save and rebuild.
     /// </summary>
     internal static class TerrainPainter
     {
-        internal const string PaintRpc = "AntTrails_Paint";
+        /// <summary>One tile's target appearance, as decided by the server.</summary>
+        internal struct TilePaint
+        {
+            public int X;
+            public int Z;
+            public float R;
+
+            /// <summary>
+            /// Dirt intensity the server last asked this tile for. Ground darker than this
+            /// was darkened by someone else, and ApplyBatch treats it as a floor.
+            /// </summary>
+            public float PrevR;
+
+            public bool Stone;
+        }
+
+        /// <summary>
+        /// How far the red channel may read above what the server last asked for before it
+        /// counts as someone else's work. A value we wrote comes back quantised to 1/255 --
+        /// the paint mask is an RGBA32 texture -- and a round trip through the terrain blob
+        /// costs a little more, so this sits comfortably clear of both.
+        /// </summary>
+        private const float PaintReadbackTolerance = 0.02f;
 
         private static readonly List<Heightmap> HmapBuffer = new List<Heightmap>();
 
         /// <summary>
-        /// Dispatches paint for as many dirty tiles as currently have loaded terrain.
-        /// Returns the tiles actually dispatched; the rest stay dirty and retry later.
+        /// Applies every tile in the batch whose terrain this peer owns, and returns those
+        /// tiles' keys. A tile is reported as handled only when we own a TerrainComp covering
+        /// it -- anything else stays the server's problem and will be offered again.
         /// </summary>
-        internal static HashSet<long> Apply(HashSet<long> dirty)
+        internal static HashSet<long> ApplyTiles(List<TilePaint> tiles)
         {
-            var applied = new HashSet<long>();
+            var handled = new HashSet<long>();
 
-            if (Heightmap.s_heightmaps == null || Heightmap.s_heightmaps.Count == 0)
+            if (tiles == null || Heightmap.s_heightmaps == null || Heightmap.s_heightmaps.Count == 0)
             {
-                return applied;
+                return handled;
             }
 
-            // TerrainComp -> flat (vertexX, vertexY, r, stone) entries.
             var batches = new Dictionary<TerrainComp, List<PaintEntry>>();
 
-            foreach (var key in dirty)
+            foreach (var tile in tiles)
             {
-                TrailStore.SplitTile(key, out int tx, out int tz);
-                if (!TrailStore.TryGet(key, out var t))
-                {
-                    continue;
-                }
-
-                var center = new Vector3(tx + 0.5f, 0f, tz + 0.5f);
+                // Eligibility is tested at the tile centre, which is where the wear lands.
+                var center = new Vector3(tile.X + 0.5f, 0f, tile.Z + 0.5f);
 
                 HmapBuffer.Clear();
                 Heightmap.FindHeightmap(center, 1f, HmapBuffer);
                 if (HmapBuffer.Count == 0)
                 {
-                    continue; // zone not loaded anywhere we can see; retry next flush
+                    continue; // zone not loaded here; some other peer will get this one
                 }
 
-                bool stone = t.Stage == 2;
-                float r = stone ? 1f : Mathf.Clamp01(t.Charge / Mathf.Max(1f, AntTrailsConfig.StepsToPath.Value));
-
-                bool dispatched = false;
+                bool owned = false;
 
                 // A tile on a zone seam is a shared vertex on two or four heightmaps.
-                // Paint every one of them, the same way vanilla terrain ops do, or the
-                // path shows a one-pixel gap at every zone boundary.
+                // Paint every one of them we own, the same way vanilla terrain ops do, or
+                // the path shows a one-pixel gap at every zone boundary.
                 foreach (var hmap in HmapBuffer)
                 {
                     // Mirrors TerrainComp.PaintCleared, which shifts by -0.5 before
                     // resolving a world position to a paint-mask vertex.
-                    hmap.WorldToVertexMask(new Vector3(tx, 0f, tz), out int vx, out int vy);
+                    hmap.WorldToVertexMask(new Vector3(tile.X, 0f, tile.Z), out int vx, out int vy);
 
                     int stride = hmap.m_width + 1;
                     if (vx < 0 || vy < 0 || vx >= stride || vy >= stride)
@@ -71,7 +89,15 @@ namespace AntTrails
                     }
 
                     var comp = hmap.GetAndCreateTerrainCompiler();
-                    if (comp == null)
+                    if (comp == null || comp.m_nview == null || !comp.m_nview.IsValid())
+                    {
+                        continue;
+                    }
+
+                    // Only the owner may write a TerrainComp's blob. Acking a tile we do not
+                    // own is what would make the server believe a trail was painted when it
+                    // was not -- the exact failure this whole path exists to avoid.
+                    if (!comp.m_nview.IsOwner() || !comp.m_initialized || comp.m_hmap == null)
                     {
                         continue;
                     }
@@ -82,89 +108,56 @@ namespace AntTrails
                         batches[comp] = list;
                     }
 
-                    list.Add(new PaintEntry { X = vx, Y = vy, R = r, Stone = stone });
-                    dispatched = true;
+                    list.Add(new PaintEntry
+                    {
+                        X = vx,
+                        Y = vy,
+                        R = tile.R,
+                        PrevR = tile.PrevR,
+                        Stone = tile.Stone
+                    });
+                    owned = true;
                 }
 
-                if (dispatched)
+                if (owned)
                 {
-                    applied.Add(key);
+                    handled.Add(TrailStore.TileKey(tile.X, tile.Z));
                 }
             }
 
             foreach (var batch in batches)
             {
-                Send(batch.Key, batch.Value);
+                ApplyBatch(batch.Key, batch.Value);
             }
 
-            return applied;
-        }
-
-        private static void Send(TerrainComp comp, List<PaintEntry> entries)
-        {
-            var nview = comp.m_nview;
-            if (nview == null || !nview.IsValid())
-            {
-                return;
-            }
-
-            var pkg = new ZPackage();
-            pkg.Write(entries.Count);
-            foreach (var e in entries)
-            {
-                pkg.Write(e.X);
-                pkg.Write(e.Y);
-                pkg.Write(e.R);
-                pkg.Write(e.Stone);
-            }
-
-            // Routes to whichever peer owns this zone's terrain; delivered locally if
-            // that happens to be us.
-            nview.InvokeRPC(PaintRpc, pkg);
+            return handled;
         }
 
         /// <summary>
-        /// Runs on the TerrainComp owner. Applies a whole batch, then saves and rebuilds once.
-        /// Eligibility is enforced here rather than on the server, because the owner is the
-        /// peer guaranteed to have the real paint mask in memory.
+        /// Applies a whole batch to one TerrainComp, then saves and rebuilds once. The single
+        /// save is the entire reason this batches at all.
         /// </summary>
-        internal static void HandlePaintRpc(TerrainComp comp, long sender, ZPackage pkg)
+        private static void ApplyBatch(TerrainComp comp, List<PaintEntry> entries)
         {
-            if (comp == null || comp.m_nview == null || !comp.m_nview.IsOwner())
-            {
-                return;
-            }
-
             var hmap = comp.m_hmap;
-            if (hmap == null || !comp.m_initialized)
-            {
-                return;
-            }
-
-            int count = pkg.ReadInt();
             int stride = comp.m_width + 1;
             int changed = 0;
 
             float minX = float.MaxValue, maxX = float.MinValue;
             float minZ = float.MaxValue, maxZ = float.MinValue;
 
-            for (int i = 0; i < count; i++)
+            foreach (var e in entries)
             {
-                int vx = pkg.ReadInt();
-                int vy = pkg.ReadInt();
-                float r = pkg.ReadSingle();
-                bool stone = pkg.ReadBool();
-
-                if (vx < 0 || vy < 0 || vx >= stride || vy >= stride)
+                if (e.X < 0 || e.Y < 0 || e.X >= stride || e.Y >= stride)
                 {
                     continue;
                 }
 
-                int idx = vy * stride + vx;
+                int idx = e.Y * stride + e.X;
 
                 // The heightmap texture is the merged result of world generation and every
                 // applied terrain op, so it is the honest source for "what is here now".
-                Color current = hmap.GetPaintMask(vx, vy);
+                Color current = hmap.GetPaintMask(e.X, e.Y);
 
                 // Never touch farmland. Walking across a turnip patch should not pave it.
                 if (current.g > 0.5f)
@@ -179,24 +172,40 @@ namespace AntTrails
                 }
 
                 Color next = current;
-                if (stone)
+                if (e.Stone)
                 {
+                    // Stone writes the blue channel, so no dirt floor can veto it: a route
+                    // worn all the way to cobbles cobbles over whoever laid the dirt first.
                     next.r = 0f;
                     next.g = 0f;
                     next.b = 1f;
                 }
                 else
                 {
-                    next.r = Mathf.Clamp01(r);
+                    // Ground darker than the server last asked for was darkened by somebody
+                    // else -- a player's hoe, or another mod. Vanilla's Heightmap.IsCleared
+                    // reads the red channel as a hard threshold at 0.5 and ignores alpha
+                    // entirely, so writing our own fractional wear over a hoed path would
+                    // both erase it and hand the tile straight back to the grass system.
+                    //
+                    // So: we may darken a tile further, never lighten one we did not darken.
+                    // Our own trails are unaffected, because on those the ground tracks what
+                    // we last sent and the floor stays at zero -- decay still works.
+                    float floor = current.r > e.PrevR + PaintReadbackTolerance ? current.r : 0f;
+                    next.r = Mathf.Max(floor, Mathf.Clamp01(e.R));
                 }
 
                 // Alpha carries vegetation clearing, and lava level in the Ashlands.
                 // Preserving it is what keeps this from melting or de-scorching terrain.
                 next.a = current.a;
 
-                if (comp.m_modifiedPaint[idx]
-                    && Mathf.Abs(comp.m_paintMask[idx].r - next.r) < 0.001f
-                    && Mathf.Abs(comp.m_paintMask[idx].b - next.b) < 0.001f)
+                // Compare against the merged mask rather than our own layer. A tile pinned
+                // at a player's value is offered again every time the wear model creeps past
+                // its repaint epsilon, and without this each of those would re-serialize the
+                // zone's terrain blob and kick the grass system for no visible change.
+                if (Mathf.Abs(current.r - next.r) < 0.001f
+                    && Mathf.Abs(current.g - next.g) < 0.001f
+                    && Mathf.Abs(current.b - next.b) < 0.001f)
                 {
                     continue;
                 }
@@ -205,8 +214,8 @@ namespace AntTrails
                 comp.m_paintMask[idx] = next;
                 changed++;
 
-                float worldX = hmap.transform.position.x + (vx - stride / 2);
-                float worldZ = hmap.transform.position.z + (vy - stride / 2);
+                float worldX = hmap.transform.position.x + (e.X - stride / 2);
+                float worldZ = hmap.transform.position.z + (e.Y - stride / 2);
                 if (worldX < minX) minX = worldX;
                 if (worldX > maxX) maxX = worldX;
                 if (worldZ < minZ) minZ = worldZ;
@@ -218,10 +227,8 @@ namespace AntTrails
                 return;
             }
 
-            // One save and one rebuild for the whole batch. This is the entire reason
-            // the mod batches at all.
             comp.Save();
-            hmap.Poke(delayed: false);
+            hmap.Poke(delayed: 0);
 
             if (ClutterSystem.instance != null)
             {
@@ -238,6 +245,7 @@ namespace AntTrails
             public int X;
             public int Y;
             public float R;
+            public float PrevR;
             public bool Stone;
         }
     }

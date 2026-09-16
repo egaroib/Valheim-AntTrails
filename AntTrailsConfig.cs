@@ -32,18 +32,20 @@ namespace AntTrails
                     "Existing painted terrain is left exactly as it is.",
                     null, admin));
 
-            StepsToPath = cfg.Bind("Formation", "StepsToPath", 60f,
+            StepsToPath = cfg.Bind("Formation", "StepsToPath", 25f,
                 new ConfigDescription(
                     "Tile crossings needed to turn one 1x1m tile into a full dirt path. " +
                     "Counts from every player pooled together, not per player. " +
                     "The tile tints progressively on the way there; grass clears at the halfway mark.",
                     new AcceptableValueRange<float>(1f, 2000f), admin));
 
-            FormationWindowDays = cfg.Bind("Formation", "FormationWindowDays", 4f,
+            FormationWindowDays = cfg.Bind("Formation", "FormationWindowDays", 12f,
                 new ConfigDescription(
                     "In-game days of no traffic for an unfinished tile to lose ALL its accumulated " +
-                    "progress. Progress leaks continuously, so a route walked once a week never " +
-                    "becomes a path while one walked daily does.",
+                    "progress. Progress leaks at a flat StepsToPath/FormationWindowDays per day, so " +
+                    "this is really a rate gate: a tile crossed less often than that never gains " +
+                    "ground at all, however long you keep at it. Lower it and only frantic traffic " +
+                    "leaves a mark; raise it and routes wear in from occasional use.",
                     new AcceptableValueRange<float>(0.25f, 200f), admin));
 
             RevertDays = cfg.Bind("Decay", "RevertDays", 30f,
@@ -60,14 +62,14 @@ namespace AntTrails
                     "Below 0.5 the grass grows back over them. Set to 0 to let paths vanish entirely.",
                     new AcceptableValueRange<float>(0f, 1f), admin));
 
-            StoneSteps = cfg.Bind("Stone", "StoneSteps", 1200f,
+            StoneSteps = cfg.Bind("Stone", "StoneSteps", 400f,
                 new ConfigDescription(
                     "Lifetime crossings on one tile before it becomes eligible to cobble over into " +
                     "stone. Unlike formation progress this total never decays, so it measures how " +
                     "heavily travelled the tile has been across the whole life of the world.",
                     new AcceptableValueRange<float>(1f, 100000f), admin));
 
-            StoneChance = cfg.Bind("Stone", "StoneChance", 0.004f,
+            StoneChance = cfg.Bind("Stone", "StoneChance", 0.01f,
                 new ConfigDescription(
                     "Chance per crossing, once eligible, that a tile turns to stone. Low on purpose: " +
                     "it should speckle stone through a well-worn road, not pave it uniformly. " +
@@ -95,8 +97,9 @@ namespace AntTrails
 
             SampleIntervalSeconds = cfg.Bind("Performance", "SampleIntervalSeconds", 0.25f,
                 new ConfigDescription(
-                    "How often this client checks which tile it is standing on. Local setting; " +
-                    "it affects only how finely your own movement is traced.",
+                    "How often this client samples its own position. Tiles between two samples " +
+                    "are filled in, so this does not decide whether fast travel registers -- only " +
+                    "how closely the traced line follows a curving route. Local setting.",
                     new AcceptableValueRange<float>(0.05f, 2f)));
 
             VerboseLogging = cfg.Bind("General", "VerboseLogging", false,

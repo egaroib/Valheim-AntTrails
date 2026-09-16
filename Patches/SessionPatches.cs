@@ -25,7 +25,7 @@ namespace AntTrails.Patches
                 return;
             }
 
-            var worldName = ZNet.World != null ? ZNet.World.m_fileName : ZNet.instance.GetWorldName();
+            var worldName = ZNet.World != null ? ZNet.World.m_worldName : ZNet.instance.GetWorldName();
             if (string.IsNullOrEmpty(worldName))
             {
                 worldName = "unknown";
