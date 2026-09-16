@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>AntTrails</AssemblyName>
     <RootNamespace>AntTrails</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Description>Player footfall slowly wears dirt paths into the world, and heavy traffic cobbles them to stone.</Description>
     <Authors>RAGEmedia</Authors>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>

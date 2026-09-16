@@ -44,6 +44,15 @@ namespace AntTrails
         private static readonly List<Heightmap> HmapBuffer = new List<Heightmap>();
 
         /// <summary>
+        /// Resolved compiler per heightmap, for the duration of one ApplyTiles call. A
+        /// present key with a null value means "resolved to nothing this call" -- that is
+        /// what keeps the readiness probe below off the per-tile path. Cleared on entry,
+        /// because a compiler can be destroyed between packets.
+        /// </summary>
+        private static readonly Dictionary<Heightmap, TerrainComp> CompCache =
+            new Dictionary<Heightmap, TerrainComp>();
+
+        /// <summary>
         /// Applies every tile in the batch whose terrain this peer owns, and returns those
         /// tiles' keys. A tile is reported as handled only when we own a TerrainComp covering
         /// it -- anything else stays the server's problem and will be offered again.
@@ -51,6 +60,7 @@ namespace AntTrails
         internal static HashSet<long> ApplyTiles(List<TilePaint> tiles)
         {
             var handled = new HashSet<long>();
+            CompCache.Clear();
 
             if (tiles == null || Heightmap.s_heightmaps == null || Heightmap.s_heightmaps.Count == 0)
             {
@@ -88,7 +98,7 @@ namespace AntTrails
                         continue;
                     }
 
-                    var comp = hmap.GetAndCreateTerrainCompiler();
+                    var comp = ResolveComp(hmap);
                     if (comp == null || comp.m_nview == null || !comp.m_nview.IsValid())
                     {
                         continue;
@@ -131,6 +141,54 @@ namespace AntTrails
             }
 
             return handled;
+        }
+
+        /// <summary>
+        /// Resolves the compiler covering a heightmap, and creates one only when the zone
+        /// genuinely has none.
+        ///
+        /// The distinction matters because vanilla's GetAndCreateTerrainCompiler resolves
+        /// through TerrainComp.s_instances, which a compiler joins in its own Awake. A zone's
+        /// heightmap is built the moment the zone spawns, but its persisted compiler ZDO is
+        /// instantiated by ZNetScene some frames later -- ten objects a frame outside a
+        /// loading screen. Calling the create-if-missing helper inside that window finds
+        /// nothing and spawns a second, empty compiler: a replicated ZDO, five arrays of
+        /// (m_width + 1) squared, and then vanilla's own "Found another terrain compiler in
+        /// this area, removing it" when the real one finally awakes and destroys ours. A
+        /// batch arriving as a base streams in produces one of those per tile per heightmap.
+        ///
+        /// So: resolve without creating, and only fall through to creation once ZNetScene
+        /// says every ZDO around here already has an instance. A virgin zone -- one nobody
+        /// has ever terraformed, which is exactly where new trails form -- has no compiler
+        /// ZDO to wait for, so it passes that gate and still gets one made for it.
+        ///
+        /// Returning null is not a failure. The tile is left unacked, stays the server's
+        /// problem, and is offered again once the area settles.
+        /// </summary>
+        private static TerrainComp ResolveComp(Heightmap hmap)
+        {
+            if (CompCache.TryGetValue(hmap, out var cached))
+            {
+                return cached;
+            }
+
+            var pos = hmap.transform.position;
+
+            // Mirrors the lookup inside GetAndCreateTerrainCompiler, minus the Instantiate.
+            var comp = TerrainComp.FindTerrainCompiler(pos);
+
+            // IsAreaReady reaches through ZoneSystem and ZDOMan, so both must be up.
+            if (comp == null
+                && ZNetScene.instance != null
+                && ZoneSystem.instance != null
+                && ZDOMan.instance != null
+                && ZNetScene.instance.IsAreaReady(pos))
+            {
+                comp = hmap.GetAndCreateTerrainCompiler();
+            }
+
+            CompCache[hmap] = comp;
+            return comp;
         }
 
         /// <summary>

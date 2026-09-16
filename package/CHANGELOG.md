@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.2.1
+
+### Arriving at a busy base no longer spawns a crowd of terrain compilers
+
+Walking into someone else's base produced a burst of vanilla's "Found another terrain
+compiler in this area, removing it" warnings -- a hundred of them in eight seconds on a
+heavily built, heavily hoed base -- and lag to match.
+
+Every zone is meant to hold exactly one terrain compiler. Vanilla's
+`Heightmap.GetAndCreateTerrainCompiler` finds the existing one through
+`TerrainComp.s_instances`, which a compiler joins in its own `Awake`. A zone's heightmap
+is built the moment the zone spawns, but the compiler ZDO that goes with it is
+instantiated by `ZNetScene` some frames later -- ten objects a frame outside a loading
+screen. AntTrails resolved a compiler for every tile in an incoming paint batch through
+that create-if-missing helper, so any tile resolved inside that window found nothing and
+spawned a second, empty compiler: a replicated ZDO plus five arrays of `(m_width + 1)`
+squared, including a 4225-entry colour mask. Vanilla then destroyed it when the real
+compiler awoke, which is what the warning was announcing. Arriving somewhere with a large
+backlog of pending tiles did this once per tile per heightmap.
+
+The ownership check that was supposed to gate all of this ran nine lines too late -- the
+object had already been created by the time the mod decided it had no business writing
+there. Tiles are now resolved without creating anything, and a compiler is only made once
+`ZNetScene` reports every object in the area already has an instance. Zones that have
+genuinely never been terraformed -- where new trails form -- still get one made for them,
+because there is no compiler ZDO for them to be waiting on. Tiles skipped in the meantime
+are left unacked, stay the server's problem, and are offered again once the area settles.
+
+This was most visible on bases with hand-laid hoe paths, which is a place with both a lot
+of built objects streaming in and a large backlog of tiles the server wants painted. Those
+tiles were then mostly no-ops at the paint stage, so the whole cost was being paid to
+change nothing.
+
+Resolution is also now cached per heightmap for the duration of a batch, instead of
+rescanning every live compiler once per tile.
+
 ## 1.2.0
 
 ### Hoe paths are no longer erased by walking on them
