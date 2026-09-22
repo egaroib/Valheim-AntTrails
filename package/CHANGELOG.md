@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.2
+- Changed the required Jotunn version to 2.30.2, matching servers on the latest Jotunn
+
 ## 1.2.1
 
 ### Arriving at a busy base no longer spawns a crowd of terrain compilers

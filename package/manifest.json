@@ -1,10 +1,10 @@
 {
   "name": "AntTrails",
-  "version_number": "1.2.1",
+  "version_number": "1.2.2",
   "website_url": "https://github.com/egaroib/Valheim-AntTrails",
   "description": "Footfall slowly wears dirt paths into the world; heavy traffic cobbles them to stone.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2350",
-    "ValheimModding-Jotunn-2.30.0"
+    "ValheimModding-Jotunn-2.30.2"
   ]
 }
